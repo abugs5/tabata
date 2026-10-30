@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Tabata Timer</title>
+  <meta name="description" content="A simple Tabata interval timer with customizable beeps.">
+  <meta name="theme-color" content="#111827">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Tabata">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body data-phase="idle">
+  <div class="app">
+    <header class="top">
+      <div class="total" id="total">Total 4:00</div>
+      <button class="icon-btn" id="openSettings" type="button" aria-label="Settings">
+        <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="currentColor" d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1a7.3 7.3 0 0 0-1.69-.98l-.38-2.65A.49.49 0 0 0 14 2h-4a.49.49 0 0 0-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1a.5.5 0 0 0-.61.22l-2 3.46a.49.49 0 0 0 .12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46a.5.5 0 0 0-.12-.64l-2.11-1.65zM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg>
+      </button>
+    </header>
+
+    <main class="display" aria-live="polite">
+      <div class="phase" id="phase">Ready</div>
+      <div class="count" id="count">30</div>
+      <div class="round" id="round">8 rounds</div>
+      <div class="bar" aria-hidden="true"><div class="bar-fill" id="bar"></div></div>
+    </main>
+
+    <footer class="controls">
+      <button id="startBtn" class="btn btn-start" type="button">Start</button>
+      <button id="pauseBtn" class="btn" type="button" disabled>Pause</button>
+      <button id="resetBtn" class="btn" type="button" disabled>Reset</button>
+    </footer>
+  </div>
+
+  <div class="sheet-backdrop" id="sheet" hidden>
+    <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="sheet-head">
+        <h2 id="settingsTitle">Settings</h2>
+        <button id="closeSettings" class="done-btn" type="button">Done</button>
+      </div>
+      <div class="sheet-body">
+        <h3>Timer</h3>
+        <p class="hint" id="activeHint" hidden>Timer changes apply after you tap Reset.</p>
+        <div class="group">
+          <div class="row">
+            <span>Work</span>
+            <div class="stepper" data-key="work" data-min="1" data-max="900" data-step="5">
+              <button type="button" data-dir="-1" aria-label="Less work time">−</button>
+              <input id="work" type="number" inputmode="numeric" pattern="[0-9]*" aria-label="Work seconds"><span class="unit">s</span>
+              <button type="button" data-dir="1" aria-label="More work time">+</button>
+            </div>
+          </div>
+          <div class="row">
+            <span>Rest</span>
+            <div class="stepper" data-key="rest" data-min="0" data-max="900" data-step="5">
+              <button type="button" data-dir="-1" aria-label="Less rest time">−</button>
+              <input id="rest" type="number" inputmode="numeric" pattern="[0-9]*" aria-label="Rest seconds"><span class="unit">s</span>
+              <button type="button" data-dir="1" aria-label="More rest time">+</button>
+            </div>
+          </div>
+          <div class="row">
+            <span>Rounds</span>
+            <div class="stepper" data-key="rounds" data-min="1" data-max="99" data-step="1">
+              <button type="button" data-dir="-1" aria-label="Fewer rounds">−</button>
+              <input id="rounds" type="number" inputmode="numeric" pattern="[0-9]*" aria-label="Rounds"><span class="unit"></span>
+              <button type="button" data-dir="1" aria-label="More rounds">+</button>
+            </div>
+          </div>
+          <div class="row">
+            <span>Get ready</span>
+            <div class="stepper" data-key="prep" data-min="0" data-max="60" data-step="5">
+              <button type="button" data-dir="-1" aria-label="Shorter get ready time">−</button>
+              <input id="prep" type="number" inputmode="numeric" pattern="[0-9]*" aria-label="Get ready seconds"><span class="unit">s</span>
+              <button type="button" data-dir="1" aria-label="Longer get ready time">+</button>
+            </div>
+          </div>
+        </div>
+
+        <h3>Sound</h3>
+        <div class="group">
+          <label class="row" for="sound">
+            <span>Sound</span>
+            <input id="sound" type="checkbox" class="switch">
+          </label>
+          <div class="row">
+            <label for="volume">Volume</label>
+            <div class="slider"><input id="volume" type="range" min="0" max="100" step="1"><output id="volumeOut" for="volume"></output></div>
+          </div>
+          <div class="row">
+            <label for="pitch">Pitch</label>
+            <div class="slider"><input id="pitch" type="range" min="-12" max="12" step="1"><output id="pitchOut" for="pitch"></output></div>
+          </div>
+          <div class="row">
+            <label for="countdown">Countdown beeps</label>
+            <div class="slider"><input id="countdown" type="range" min="0" max="5" step="1"><output id="countdownOut" for="countdown"></output></div>
+          </div>
+        </div>
+
+        <h3>Sounds</h3>
+        <div class="group">
+          <div class="row">
+            <label for="countdownSound">Countdown beep</label>
+            <div class="pick"><select id="countdownSound" data-kind="countdown"></select><button type="button" class="play" data-test="countdownSound" aria-label="Play countdown beep">▶</button></div>
+          </div>
+          <div class="row">
+            <label for="workSound">Start work</label>
+            <div class="pick"><select id="workSound"></select><button type="button" class="play" data-test="workSound" aria-label="Play start work sound">▶</button></div>
+          </div>
+          <div class="row">
+            <label for="restSound">Start rest</label>
+            <div class="pick"><select id="restSound"></select><button type="button" class="play" data-test="restSound" aria-label="Play start rest sound">▶</button></div>
+          </div>
+          <div class="row">
+            <label for="finishSound">Workout finished</label>
+            <div class="pick"><select id="finishSound"></select><button type="button" class="play" data-test="finishSound" aria-label="Play workout finished sound">▶</button></div>
+          </div>
+        </div>
+
+        <button class="btn-wide" id="testSound" type="button">Test sound</button>
+        <button class="btn-link" id="resetDefaults" type="button">Restore defaults</button>
+      </div>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
