@@ -221,6 +221,14 @@ body.paused .round { opacity: 0.5; }
 }
 .row + .row { border-top: 1px solid var(--line); }
 .row > :first-child { flex-shrink: 0; }
+.row > .label-long { flex-shrink: 1; }
+.row small {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.row .switch { flex-shrink: 0; }
 
 .stepper {
   display: flex;

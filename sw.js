@@ -1,5 +1,5 @@
 // Bump this version whenever you change any file, so phones pick up the update.
-const CACHE = 'tabata-v2';
+const CACHE = 'tabata-v3';
 
 const ASSETS = [
   './',
