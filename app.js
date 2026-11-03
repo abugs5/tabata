@@ -4,7 +4,7 @@
   // ---------- Settings ----------
   const DEFAULTS = {
     work: 30, rest: 10, rounds: 8, prep: 5,
-    sound: true, volume: 80, pitch: 0, countdown: 3,
+    sound: true, mix: true, volume: 80, pitch: 0, countdown: 3,
     countdownSound: 'beep', workSound: 'whistle', restSound: 'chime', finishSound: 'bell',
   };
   const STORAGE_KEY = 'tabata.settings.v1';
@@ -36,15 +36,29 @@
   let ctx = null;
   let master = null;
   let noiseBuffer = null;
+  let bus = null;       // carries the workout's queued sounds, so Pause/Reset can silence them
+  let keepAlive = null;
+  let audioStalled = false;
+
+  // iOS 17+: 'ambient' mixes with podcasts/music (but follows the silent switch);
+  // 'playback' ignores the silent switch but stops other audio, like a media app.
+  function applyAudioSession() {
+    try { if (navigator.audioSession) navigator.audioSession.type = settings.mix ? 'ambient' : 'playback'; } catch (e) { /* ignore */ }
+  }
 
   // Must be called from a user gesture (tap) so iOS allows sound.
   function initAudio() {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     if (!ctx) {
-      // iOS 17+: play through the ringer/silent switch like a media app.
-      try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* ignore */ }
+      applyAudioSession();
       ctx = new AC();
+      // After an interruption (phone call, another app's audio) re-queue sounds from now.
+      ctx.onstatechange = () => {
+        if (ctx.state !== 'running') { audioStalled = true; return; }
+        if (state === 'running' && (audioStalled || !bus)) reschedule();
+        audioStalled = false;
+      };
       const comp = ctx.createDynamicsCompressor();
       master = ctx.createGain();
       master.connect(comp).connect(ctx.destination);
@@ -151,19 +165,51 @@
     },
   };
 
+  function voice(name, t, mul, out) {
+    if (SYNTH[name]) SYNTH[name](out, t, Math.pow(2, settings.pitch / 12) * mul);
+  }
+
+  function applyVolume() {
+    if (master) master.gain.setValueAtTime(Math.pow(settings.volume / 100, 2) * 1.6, ctx.currentTime);
+  }
+
   function play(name, offset = 0, mul = 1, force = false) {
-    if (!ctx || !SYNTH[name] || (!settings.sound && !force)) return;
+    if (!ctx || (!settings.sound && !force)) return;
     if (ctx.state !== 'running') ctx.resume().catch(() => {});
-    const now = ctx.currentTime;
-    master.gain.setValueAtTime(Math.pow(settings.volume / 100, 2) * 1.6, now);
-    const m = Math.pow(2, settings.pitch / 12) * mul;
-    SYNTH[name](master, now + 0.01 + offset, m);
+    applyVolume();
+    voice(name, ctx.currentTime + 0.01 + offset, mul, master);
   }
 
   // "Workout finished" plays the chosen sound as a rising three-note flourish.
-  function playFinish(name, force = false) {
+  function finishFlourish(name, t, out) {
     const step = Math.min(0.45, Math.max(0.22, SOUNDS[name].dur * 0.6));
-    [1, 1.26, 1.5].forEach((r, i) => play(name, i * step, r, force));
+    [1, 1.26, 1.5].forEach((r, i) => voice(name, t + i * step, r, out));
+  }
+
+  function playFinish(name, force = false) {
+    if (!ctx || (!settings.sound && !force)) return;
+    if (ctx.state !== 'running') ctx.resume().catch(() => {});
+    applyVolume();
+    finishFlourish(name, ctx.currentTime + 0.01, master);
+  }
+
+  // A 20 Hz hum far below hearing level. It keeps the phone treating the app as
+  // "playing audio", so it is less likely to be frozen while another app is in front.
+  function startKeepAlive() {
+    if (!ctx || keepAlive) return;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.frequency.value = 20;
+    g.gain.value = 0.001;
+    o.connect(g).connect(ctx.destination);
+    o.start();
+    keepAlive = o;
+  }
+  function stopKeepAlive() {
+    if (!keepAlive) return;
+    keepAlive.stop();
+    keepAlive.disconnect();
+    keepAlive = null;
   }
 
   function testSound() {
@@ -193,8 +239,8 @@
   let idx = 0;
   let phaseEnd = 0;   // performance.now() timestamp when the current phase ends
   let remainingMs = 0;
-  let lastSec = 0;
   let timerId = null;
+  let finishTimer = null;
 
   function buildPlan() {
     const phases = [];
@@ -215,46 +261,112 @@
     else if (phase.type === 'rest') play(settings.restSound);
   }
 
+  // ---------- Sound schedule ----------
+  // Sounds are queued ahead on the audio clock, so they stay on time even when the
+  // phone slows down or pauses the page's timers (screen off, another app in front).
+  const AHEAD_MS = 120000;
+  let scheduledUntil = 0; // performance.now() time up to which sounds are queued
+  let lastScheduleAt = 0;
+
+  // Every sound left in the workout, as { at: performance.now() time, name, finish }.
+  function workoutEvents() {
+    const events = [];
+    let end = phaseEnd;
+    for (let i = idx; i < plan.phases.length; i++) {
+      const ph = plan.phases[i];
+      if (i > idx) {
+        end += ph.dur * 1000;
+        const sound = ph.type === 'work' ? settings.workSound : ph.type === 'rest' ? settings.restSound : null;
+        if (sound) events.push({ at: end - ph.dur * 1000, name: sound });
+      }
+      for (let s = Math.min(settings.countdown, ph.dur - 1); s >= 1; s--) {
+        events.push({ at: end - s * 1000, name: settings.countdownSound });
+      }
+    }
+    events.push({ at: end, name: settings.finishSound, finish: true });
+    return events;
+  }
+
+  function scheduleAhead() {
+    if (!ctx || ctx.state !== 'running' || state !== 'running' || !settings.sound) return;
+    const now = performance.now();
+    const horizon = now + AHEAD_MS;
+    lastScheduleAt = now;
+    if (!bus) { bus = ctx.createGain(); bus.connect(master); }
+    applyVolume();
+    for (const e of workoutEvents()) {
+      if (e.at <= scheduledUntil || e.at > horizon || e.at < now - 250) continue;
+      const t = ctx.currentTime + Math.max(0, e.at - now) / 1000;
+      if (e.finish) finishFlourish(e.name, t, bus);
+      else voice(e.name, t, 1, bus);
+    }
+    scheduledUntil = horizon;
+  }
+
+  function cancelScheduled() {
+    if (!bus) return;
+    bus.gain.setValueAtTime(0, ctx.currentTime);
+    bus.disconnect();
+    bus = null;
+  }
+
+  function reschedule() {
+    cancelScheduled();
+    scheduledUntil = performance.now();
+    scheduleAhead();
+  }
+
   function start() {
     initAudio();
     if (state === 'running') return;
-    if (state === 'idle' || state === 'done') {
+    const fresh = state === 'idle' || state === 'done';
+    if (fresh) {
       plan = buildPlan();
       idx = 0;
       remainingMs = plan.phases[0].dur * 1000;
-      lastSec = plan.phases[0].dur;
-      phaseStartSound(plan.phases[0]);
     }
+    clearTimeout(finishTimer);
     state = 'running';
     phaseEnd = performance.now() + remainingMs;
+    if (fresh) phaseStartSound(plan.phases[0]);
+    startKeepAlive();
+    reschedule();
     clearInterval(timerId);
     timerId = setInterval(tick, 50);
     keepAwake();
     render();
   }
 
+  function stopRun() {
+    clearInterval(timerId);
+    stopKeepAlive();
+    allowSleep();
+  }
+
   function pause() {
     if (state !== 'running') return;
     remainingMs = Math.max(0, phaseEnd - performance.now());
     state = 'paused';
-    clearInterval(timerId);
-    allowSleep();
+    cancelScheduled();
+    stopRun();
     render();
   }
 
   function reset() {
-    clearInterval(timerId);
     state = 'idle';
     plan = null;
-    allowSleep();
+    cancelScheduled();
+    stopRun();
     render();
   }
 
+  // The finish flourish is already queued; let it ring out before releasing it.
   function finish() {
-    clearInterval(timerId);
     state = 'done';
-    playFinish(settings.finishSound);
-    allowSleep();
+    stopRun();
+    const doneBus = bus;
+    bus = null;
+    finishTimer = setTimeout(() => { if (doneBus) doneBus.disconnect(); }, 4000);
     render();
   }
 
@@ -266,19 +378,11 @@
     while (rem <= 0) {
       idx++;
       if (idx >= plan.phases.length) { finish(); return; }
-      const next = plan.phases[idx];
-      phaseEnd += next.dur * 1000;
+      phaseEnd += plan.phases[idx].dur * 1000;
       rem = phaseEnd - performance.now();
-      lastSec = next.dur;
-      if (rem > 0) phaseStartSound(next);
     }
 
-    const secs = Math.ceil(rem / 1000);
-    if (secs < lastSec) {
-      lastSec = secs;
-      const phase = plan.phases[idx];
-      if (secs >= 1 && secs <= settings.countdown && secs < phase.dur) play(settings.countdownSound);
-    }
+    if (performance.now() - lastScheduleAt > 1000) scheduleAhead();
     render();
   }
 
@@ -365,6 +469,7 @@
   function fillControls() {
     ['work', 'rest', 'rounds', 'prep'].forEach((k) => { $(k).value = settings[k]; });
     $('sound').checked = settings.sound;
+    $('mix').checked = settings.mix;
     $('volume').value = settings.volume;
     $('pitch').value = settings.pitch;
     $('countdown').value = settings.countdown;
@@ -381,6 +486,7 @@
   function changed() {
     saveSettings();
     updateOutputs();
+    if (state === 'running') reschedule();
     render();
   }
 
@@ -414,6 +520,12 @@
     settings.sound = e.target.checked;
     changed();
     if (settings.sound) { initAudio(); play(settings.countdownSound); }
+  });
+
+  $('mix').addEventListener('change', (e) => {
+    settings.mix = e.target.checked;
+    applyAudioSession();
+    changed();
   });
 
   ['volume', 'pitch', 'countdown'].forEach((k) => {
